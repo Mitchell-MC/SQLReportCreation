@@ -1,5 +1,8 @@
 -- Initial Query to set up report table
 USE wecloudrevenue;
+SET SQL_SAFE_UPDATES = 0;
+
+DROP TABLE report_table2;
 CREATE TABLE IF NOT EXISTS report_table2 AS
 SELECT 
     c.yr_wk_num AS Year_Week,
@@ -22,6 +25,9 @@ WHERE
     AND dc.segment = 'Segment A'
 GROUP BY
     c.yr_wk_num;
+
+ALTER TABLE fact_date_customer_campaign ADD COLUMN last_updated DATE;
+ALTER TABLE report_table2 ADD UNIQUE INDEX idx_year_week (Year_Week);
 
 
 DELIMITER $$
@@ -56,14 +62,33 @@ BEGIN
 		dim_customer dc ON f.customer_id = dc.customer_id
         -- USE f.date > previousUpdateDate AND f.date <= simulatedToday if report fails to run for sseveral days
 	WHERE
-		c.cal_dt = DATE_SUB(MAKEDATE(YEAR(simulatedToday) - 1, DAYOFYEAR(simulatedToday)), INTERVAL 1 DAY)
+		(f.last_updated IS NULL OR f.last_updated < sameDayPreviousYear)
+		AND c.cal_dt BETWEEN startOfPreviousYear AND sameDayPreviousYear
 		AND dc.segment = 'Segment A'
 	GROUP BY 
-		c.yr_wk_num;
+		c.yr_wk_num
+	ON DUPLICATE KEY UPDATE
+		Gross = VALUES(Gross),
+		Net = VALUES(Net),
+		Margin = VALUES(Margin),
+		AVGD_Gross = VALUES(AVGD_Gross),
+		AVGD_Net = VALUES(AVGD_Net),
+		PP_GROSS = VALUES(PP_GROSS),
+		PP_Net = VALUES(PP_Net);
+
+	
+	UPDATE fact_date_customer_campaign f
+	JOIN calendar c ON f.date = c.cal_dt
+	JOIN dim_customer dc ON f.customer_id = dc.customer_id
+	SET f.last_updated = CURDATE()
+	WHERE
+		(f.last_updated IS NULL OR f.last_updated < sameDayPreviousYear)
+		AND c.cal_dt BETWEEN startOfPreviousYear AND sameDayPreviousYear
+		AND dc.segment = 'Segment A';
 END$$
 
 DELIMITER ;
-CALL GenerateDailyReport2();
+
 DROP EVENT IF EXISTS daily_report_event2;
 
 CREATE EVENT IF NOT EXISTS daily_report_event2
@@ -71,5 +96,5 @@ ON SCHEDULE EVERY 1 DAY
 STARTS '2018-09-24 05:00:00'
 DO
   CALL GenerateDailyReport2();
-
+CALL GenerateDailyReport2();
 -- Use the above to call the procedure outside of schedule
